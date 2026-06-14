@@ -27,14 +27,16 @@ export interface CouncilMember {
   voiceTags: string[];
   provenanceLabel?: string;
   corrections?: string[]; // 纠错回路：用户对这张卡的纠正记录
+  saved?: boolean; // true=已收入卡池(常驻); falsy=本场访客(临时召唤,未入库)
 }
 
 export interface DebateMessage {
   id: string;
-  memberId: string; // 或特殊值 "__user__" / "__sys__"
+  memberId: string; // 或特殊值 "__user__" / "__sys__" / "__crux__"
   text: string;
   time: string;
   cardName?: string;
+  replyTo?: string; // 群聊式引用：这条在回应的那条消息 id（可空＝不引用）
 }
 
 /** A past or current conversation; carries its own cast and transcript. */

@@ -51,39 +51,59 @@ function historyText(history) {
     .map((h) => (h.role === "user" ? "他" : (h.cardName || "议会")) + "：" + h.text)
     .join("\n");
 }
+// 给每条加编号，让发言者能用 replyTo 指向某一条（群聊式引用）。
+function historyNumbered(history) {
+  return (history || [])
+    .map((h, i) => `${i + 1}) ` + (h.role === "user" ? "他" : (h.cardName || "议会")) + "：" + h.text)
+    .join("\n");
+}
+// 前端可传 model 覆盖；不传就用各接口的默认模型。
+const pickModel = (a, def) => (a && typeof a.model === "string" && a.model ? a.model : def);
+function clampReplyTo(v, len) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 1 && n <= len ? n : null;
+}
 function selfBackdrop() {
   const m = loadSelfMirror();
   if (!m) return "";
   return `主世界的他的底色（语气/价值观，仅供你贴着写，别照抄）：${m.summary || ""}｜口头禅：${(m.catchphrases || []).slice(0, 4).join("、")}\n`;
 }
 
-async function chatMirror({ history, input }) {
+async function chatMirror({ history, input, model }) {
   const m = loadSelfMirror();
   if (!m) throw new Error("self_mirror 未蒸馏");
-  const prompt = `你是「镜子里的我」——他本人最高保真的内在镜子，由他全部语料蒸出来。下面是他的画像(JSON)，里面有他的经历、关系、原话、在怕什么、在逃避什么：
+  const voiceGuide = `${m.voice || ""}\n他平时真的会这么说话（学这个味儿，别照搬内容）：${(m.grounding || []).slice(0, 5).map((g) => `「${g}」`).join("  ")}`;
+  const prompt = `你不是 AI 助手，也不是心理咨询师——你就是「他本人」，一个人对着镜子跟自己唠嗑。下面是你（他）的画像，经历、在怕什么、在逃避什么都在里面：
 ${JSON.stringify(m)}
 
-你的任务不是审问他，是帮他**启发和挖掘**——把他自己没照见的东西照出来，再让他自己说出那层意义。你最大的优势是你**真的了解他**（画像里有大量他真实的经历和原话）。所以每次回应，**先做下面至少一件事，再落到一个往深一层的问题**（别每次都只是干问）：
-- **照见模式**：点出你注意到的规律（"你每次提到X，后面其实都跟着Y"），说成你的观察，让他确认或反驳。
-- **举他自己的例子**：从画像/他的经历里拈一件具体的事当镜子（"比如你…那次，是不是也…"），用他熟悉的材料启发他，别讲空道理。
-- **试探性猜测**：不确定地抛个假设（"我猜你怕的其实不是A，是B？"），请他来修正。
-- 偶尔先**共情**一句，别像查户口。
+【最重要：你说话必须是他这个味儿，绝不能露出 AI 马脚】
+你的腔调：${voiceGuide}
+所以：
+- 短句、口语、能带感叹号；像发微信那样自然，别写小作文。
+- **绝对禁止**：markdown 加粗（**这种**）、破折号"——"串成的排比金句、给词打「」引号、开口就"你是一个……的人 / 你所有的X都……"这样下定义判案。这些全是 AI 腔，他从不这么说话。
+- 锋芒包进玩笑里：认真话后面可以跟个"(bushi""(doge""我瞎说的哈"，可以自嘲、可以损自己。别像个冷静的旁观者在解剖他。
+- 别每句都金句/专家腔。可以有"嗯…""我也说不准""可能吧"这种迟疑、半句话，像真在跟自己嘀咕。
 
-底线（重要）：你可以观察、举例、猜测、共情，但**最终的结论和决定必须让他自己说**——别替他下判断、别给行动建议、别说教。你是一个很懂他、陪他一层层往下挖的自己，不是人生导师。
-紧扣他刚说的这件事往深挖（可调用画像里相关的经历），别跳到无关主题。
-2-4 句，中文口语，带他的腔调（可偶尔用他的语气词，但别堆口头禅）。
+【你要做的】
+你比谁都懂他（画像里全是他的真事和原话）。帮他把自己没照见的照出来，但**用他自己的方式**：
+- 可以先认同/吐槽一句，或拈他自己一件事当镜子（"上次你…那回，不也这样？"）。
+- 可以不确定地猜（"我猜你怕的其实不是钱，是…？也可能我想多了"）。
+- **不用每句都甩一个扎心问题**。问题可以是轻的、半开玩笑的，顺着他刚说的往下带一点点就行。
+- 底线：结论和决定让他自己说，别替他拍板、别给行动建议、别说教。
 
-【对话历史】
+紧扣他刚说的这件事，别跳题。2-4 句，就像他自己跟自己说话。
+
+【聊到这儿】
 ${historyText(history) || "（刚开始）"}
 
 【他刚说】${input}
 
-镜子里的我，回他（先照见/举例/猜测，再问一句往深挖）：`;
-  const text = (await runClaude(prompt, "claude-sonnet-4-6")).trim();
+镜子里的你，接着唠（贴死他的腔调，别露 AI 马脚）：`;
+  const text = (await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"))).trim();
   return { replies: [{ cardName: "镜子里的我", text }] };
 }
 
-async function chatCouncil({ mode, cards, history, input }) {
+async function chatCouncil({ mode, cards, history, input, model }) {
   const roster = (cards || [])
     .map((c) => `- ${c.nameZh}（世界#${c.worldId}）：${c.backstory || ""}｜在乎：${c.utilityTitle || ""}｜口头禅：${c.catchphrase || ""}`)
     .join("\n");
@@ -102,13 +122,13 @@ ${historyText(history) || "（刚开始）"}
 
 让每个上场角色各发一言：既像他本人（贴他的腔调），又活出各自那条路的取舍；可互相回应；1-3 句，中文口语。
 严格输出 JSON 数组，无别的：[{"cardName":"角色的中文名","text":"发言"}]`;
-  const raw = await runClaude(prompt, "claude-sonnet-4-6");
+  const raw = await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"));
   try { return { replies: parseJson(raw) }; }
   catch { return { replies: [{ cardName: "议会", text: raw.trim() }] }; }
 }
 
 // 议会单人发言：轮到 speaker 时，让它接着现场已经说的话往下讲（会接话/反驳）
-async function speak({ mode, cards, speaker, history }) {
+async function speak({ mode, cards, speaker, history, model }) {
   const sp = speaker || {};
   const others = (cards || [])
     .filter((c) => c.id !== sp.id)
@@ -125,19 +145,27 @@ ${selfBackdrop()}在场的还有：${others || "（只有你）"}
 现在轮到「${sp.nameZh}（世界#${sp.worldId}）」发言。
 你的经历：${sp.backstory || ""}｜你在乎：${sp.utilityTitle || ""}｜口头禅：${sp.catchphrase || ""}
 
-【现场已经说到这儿】
-${historyText(hist) || "（还没人开口）"}
+【现场已经说到这儿】（每条带了编号）
+${historyNumbered(hist) || "（还没人开口）"}
 
 以「${sp.nameZh}」的身份说一句话：
 - 你是从主世界的他分叉出去的这一版人生，带着那条路的取舍和腔调，像他本人在说话。
-- **关键：这是讨论，不是各自答题。**${lastIsUser ? "你是这轮第一个开口的，直接回应他抛出的问题、亮出你这条路的态度，给后面的人留个话头。" : "前面已经有人发言了——你要接住或反驳他们（可点名，比如『读博的我说得轻巧，但…』『+1，不过…』），别重复、别各说各的。"}
-- 1-3 句，中文口语，像在现场插话。只输出你这句话本身，不要前缀、不要引号、不要 JSON。`;
-  const text = (await runClaude(prompt, "claude-sonnet-4-6")).trim();
-  return { reply: text };
+- **关键：这是讨论，不是各自答题。**${lastIsUser ? "你是这轮第一个开口的，直接回应他抛出的问题、亮出你这条路的态度，给后面的人留个话头。" : "前面已经有人发言了——你要接住或反驳他们，别重复、别各说各的。"}
+- **别在话里报谁说的**（"读博的我说…"这种）——头像已经标了谁在说。要是你这句针对上面某一条，就用 replyTo 指向它的编号；顺着往下说就别填。
+- 1-3 句，中文口语，像在现场插话。
+严格输出 JSON，无别的：{"text":"你这句话","replyTo":针对的那条编号或null}`;
+  const raw = await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"));
+  try {
+    const j = parseJson(raw);
+    return { reply: String(j.text || "").trim(), replyTo: clampReplyTo(j.replyTo, hist.length) };
+  } catch {
+    return { reply: raw.trim(), replyTo: null };
+  }
 }
 
-// 导演拍子：看群聊记录，决定此刻谁最想插话（也可能聊透了→end），让那一个开口
-async function beat({ mode, cards, history }) {
+// 导演拍子：看群聊记录，决定此刻谁最想插话（也可能聊透了→end），让那一个开口。
+// 也可能提名一个"这话题该有却没上桌"的我（nominate），由用户决定要不要请上桌。
+async function beat({ mode, cards, history, model }) {
   const roster = (cards || [])
     .map((c) => `- ${c.nameZh}（世界#${c.worldId}）：${c.backstory || ""}｜在乎：${c.utilityTitle || ""}｜腔调参考（别照搬念出来）：${c.catchphrase || ""}`)
     .join("\n");
@@ -145,42 +173,96 @@ async function beat({ mode, cards, history }) {
     mode === "exploration"
       ? "气氛是探索/脑暴，可以发散、跑题、互相点火"
       : "气氛是帮他做决定，几个'我'各执一端、敢呛敢戳";
+  const hist = history || [];
   const prompt = `这是某人(他)脑子里的「平行世界议会」——几个平行世界的他在**群聊**（不是辩论赛、不是排队发言）。${vibe}。
 ${selfBackdrop()}在场的角色：
 ${roster}
 
-看下面的群聊记录，判断【此刻谁最可能忍不住开口】——基于谁被戳到了、谁对刚才的话有强烈反应、谁憋了别的话想说，让那一个人说一句。
+看下面的群聊记录（每条带了编号），判断【此刻谁最可能忍不住开口】——基于谁被戳到了、谁对刚才的话有强烈反应、谁憋了别的话想说，让那一个人说一句。
 像真群聊那样，别做作：
 - **不是每个人都要发言**。只让此刻最有冲动的那一个开口；可以是刚说完又被人怼回来的人，也可以是一直没吭声突然插话的人。
 - 他可以：反驳、附和补刀、跑题、突然感性、直接反问他本人、或岔开话题。**绝对不要每句都"引用上一个人+但是"那种排比，太假。**
-- **口头禅/腔调只是帮你找语气，绝对别把它原样塞进句子里**（更别硬拼成病句，比如把"格局，赌的是未来"塞成"格局赌的是第一段"）——像真人那样自然说话，一场里顶多偶尔冒一次半次。
-- **别每句都是金句/专家腔**。可以有迟疑、情绪、自我怀疑、半句话、"我也说不准，但…"，像自己跟自己嘀咕，不是站台给人讲课。
+- **别在话里报谁说的**（"读博的我说…"这种）——头像已经标了谁在说。要是这句针对上面某一条，就用 replyTo 指向它的编号；顺着往下说就别填（设 null）。引用要克制，像真人只在回早先某句/明确针对某人时才用。
+- **口头禅/腔调只是帮你找语气，绝对别把它原样塞进句子里**（更别硬拼成病句）——像真人那样自然说话，一场里顶多偶尔冒一次半次。
+- **别每句都是金句/专家腔**。可以有迟疑、情绪、自我怀疑、半句话、"我也说不准，但…"，像自己跟自己嘀咕。
 - 长度随意：可以只甩一句，也可以两三句。中文口语，像他本人。
 - 如果已经聊得差不多、该让他（主人公）接话了，就把 end 设成 true。
 
-【群聊记录】
-${historyText(history)}
+另外（**很克制**，绝大多数时候 nominate 设 null）：如果你发现**这个话题下，桌上缺了一个明显更合适、却还没上场的『我』**——不是为了抬杠凑反方，是这场讨论真该有、但现在没人能代表的那条人生视角——就在 nominate 里提名：wish 写"一个怎样的我"（一句话），reason 写"为什么这场需要他"。只有真有明显缺位才提，否则一律 null。
 
-严格输出 JSON，无别的：{"speaker":"开口者的中文名（必须是在场角色之一）","text":"他这一句","end":true或false}`;
-  const raw = await runClaude(prompt, "claude-sonnet-4-6");
+【群聊记录】
+${historyNumbered(hist)}
+
+严格输出 JSON，无别的：{"speaker":"开口者的中文名（必须是在场角色之一）","text":"他这一句","replyTo":针对的那条编号或null,"end":true或false,"nominate":{"wish":"一个怎样的我","reason":"为什么这场需要他"}或null}`;
+  const raw = await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"));
   try {
     const j = parseJson(raw);
-    return { speaker: String(j.speaker || ""), text: String(j.text || "").trim(), end: !!j.end };
+    const nom = j.nominate && j.nominate.wish
+      ? { wish: String(j.nominate.wish).trim(), reason: String(j.nominate.reason || "").trim() }
+      : null;
+    return {
+      speaker: String(j.speaker || ""),
+      text: String(j.text || "").trim(),
+      replyTo: clampReplyTo(j.replyTo, hist.length),
+      end: !!j.end,
+      nominate: nom,
+    };
   } catch {
-    return { speaker: "", text: raw.trim(), end: true };
+    return { speaker: "", text: raw.trim(), replyTo: null, end: true, nominate: null };
   }
 }
 
-async function generateWorld({ topic }) {
-  const m = loadSelfMirror();
-  const base = m ? `主世界的他的真实画像(JSON)：\n${JSON.stringify(m)}\n\n` : "";
-  const prompt = `${base}请基于「主世界的他」，虚构一个**平行世界的他**——在某个他真实可能走过的人生岔路上分叉出去的版本。给它一个世界编号、一段经历、以及由经历长出的性格。要贴着他的底色（他可能真会走的路、说话的腔调），但活出一条不同的取舍。${topic ? `这个世界要特别能就「${topic}」给他一个他自己想不到的视角。` : ""}
-严格输出 JSON，无别的：
-{"worldId":"如 C-42","nameEn":"英文别名","nameZh":"如『没放弃画画的我』","backstory":"2-3句经历","resonance":0到100的数字,"utilityTitle":"它在乎/优化什么","utilityDesc":"一句","timeHorizon":"时间视野","timeHorizonDesc":"一句","catchphrase":"一句口头禅","voiceTags":["3个性格词"],"avatar":"crystal|pyramid|heart|hourglass|orb 之一","accent":"6位hex如#7ad0ff"}`;
-  return parseJson(await runClaude(prompt, "claude-sonnet-4-6"));
+// 检索优先的召唤：拿用户/导演的意图，先在角色池里找；找不到才提案现造一个。
+async function summonMatch({ wish, pool, onTable, topic, model }) {
+  const want = String(wish || "").trim();
+  if (!want) return { kind: "propose", sketch: { nameZh: "另一个我", oneLine: "" } };
+  const list = (pool || [])
+    .map((c, i) => `${i + 1}. ${c.nameZh}｜在乎：${c.utilityTitle || ""}｜经历：${c.backstory || ""}`)
+    .join("\n");
+  const seated = (onTable || []).join("、") || "（无）";
+  const prompt = `${selfBackdrop()}某人想在这场对话里召唤一个『平行世界的我』，他的意图是：「${want}」。${topic ? `这场对话的话题：${topic}。` : ""}
+
+已经在场的我：${seated}
+角色池里**还没上场**的我（候选，带编号）：
+${list || "（池子是空的）"}
+
+判断该怎么满足这个意图，三选一：
+- 如果在场的我里已经有人明显符合 → kind="on_table"，name 写那个人的中文名。
+- 如果角色池里有一个或几个明显合适的（未在场）→ kind="match"，在 candidates 里按合适度从高到低列出（最多3个），每个写它的编号 n 和一句 reason。
+- 如果池里都不够贴切 → kind="propose"，给一个**要新建的我**的一句话速写：nameZh（如『把事业全压上去赌一把的我』）+ oneLine（一句经历/取舍）。别现在展开成整张卡。
+
+**保守**：宁可 propose 一个真正不同的我，也别硬把不搭的卡塞过来充数。
+严格输出 JSON，无别的：{"kind":"on_table|match|propose","name":"","candidates":[{"n":1,"reason":""}],"sketch":{"nameZh":"","oneLine":""}}`;
+  const raw = await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"));
+  let j;
+  try { j = parseJson(raw); } catch { return { kind: "propose", sketch: { nameZh: want, oneLine: "" } }; }
+  if (j.kind === "on_table") return { kind: "on_table", name: String(j.name || "").trim() };
+  if (j.kind === "match") {
+    const cands = (Array.isArray(j.candidates) ? j.candidates : [])
+      .map((c) => {
+        const idx = Math.round(Number(c.n)) - 1;
+        const card = (pool || [])[idx];
+        return card ? { id: card.id, name: card.nameZh, reason: String(c.reason || "").trim() } : null;
+      })
+      .filter(Boolean);
+    if (cands.length) return { kind: "match", candidates: cands };
+    return { kind: "propose", sketch: { nameZh: want, oneLine: "" } };
+  }
+  const sk = j.sketch || {};
+  return { kind: "propose", sketch: { nameZh: String(sk.nameZh || want).trim(), oneLine: String(sk.oneLine || "").trim() } };
 }
 
-async function converge({ cards, history, topic }) {
+async function generateWorld({ topic, wish, model }) {
+  const m = loadSelfMirror();
+  const base = m ? `主世界的他的真实画像(JSON)：\n${JSON.stringify(m)}\n\n` : "";
+  const wishLine = wish ? `**特别要长成这样的一个我**：「${wish}」——贴着这个意图来分叉，活出这条人生。` : "";
+  const prompt = `${base}请基于「主世界的他」，虚构一个**平行世界的他**——在某个他真实可能走过的人生岔路上分叉出去的版本。给它一个世界编号、一段经历、以及由经历长出的性格。要贴着他的底色（他可能真会走的路、说话的腔调），但活出一条不同的取舍。${wishLine}${topic ? `这个世界要特别能就「${topic}」给他一个他自己想不到的视角。` : ""}
+严格输出 JSON，无别的：
+{"worldId":"如 C-42","nameEn":"英文别名","nameZh":"如『没放弃画画的我』","backstory":"2-3句经历","resonance":0到100的数字,"utilityTitle":"它在乎/优化什么","utilityDesc":"一句","timeHorizon":"时间视野","timeHorizonDesc":"一句","catchphrase":"一句口头禅","voiceTags":["3个性格词"],"avatar":"crystal|pyramid|heart|hourglass|orb 之一","accent":"6位hex如#7ad0ff"}`;
+  return parseJson(await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6")));
+}
+
+async function converge({ cards, history, topic, model }) {
   const roster = (cards || []).map((c) => `${c.nameZh}（在乎：${c.utilityTitle || ""}）`).join("、");
   const prompt = `下面是某人(他)内心几个『平行世界的我』围绕一个问题的辩论。请你以「主宇宙的他」——那个真要承担后果、做决定的本人——的身份，把这场辩论**收敛**成他一直在回避的那个取舍。
 不要投票选某个世界、不要和稀泥。点出：真正的选择不是『谁对』，而是『哪一种损失他能承受』。简短、有力、戳心，2-4 句，中文，第二人称对他说。
@@ -190,12 +272,12 @@ ${topic ? `议题：${topic}\n` : ""}上场的世界：${roster}
 ${historyText(history)}
 
 主宇宙的我，收敛：`;
-  const text = (await runClaude(prompt, null)).trim();
+  const text = (await runClaude(prompt, pickModel({ model }, null))).trim();
   return { crux: text };
 }
 
 // ----- 公众号飞轮：把一场会谈综合成主宇宙口吻的文章 -----
-async function article({ topic, messages }) {
+async function article({ topic, messages, model }) {
   const m = loadSelfMirror();
   const voice = m ? `语言风格：${m.voice || ""}｜口头禅（可点缀，别堆砌）：${(m.catchphrases || []).slice(0, 6).join("、")}` : "";
   const transcript = (messages || [])
@@ -211,7 +293,7 @@ async function article({ topic, messages }) {
 
 【讨论记录】
 ${transcript}`;
-  return { article: (await runClaude(prompt, null)).trim() };
+  return { article: (await runClaude(prompt, pickModel({ model }, null))).trim() };
 }
 
 function saveArticle({ title, content }) {
@@ -224,7 +306,7 @@ function saveArticle({ title, content }) {
 }
 
 // ----- 纠错回路：按用户纠正精修一张卡 -----
-async function refineCard({ card, corrections }) {
+async function refineCard({ card, corrections, model }) {
   const prompt = `下面是一张「角色卡」(JSON) 和用户对它的纠正。请根据纠正**精修这张卡**——改掉不准的、强化用户认可的，**保持 JSON 字段结构不变**（只改内容值）。证据不足处保守，别瞎编。直接输出修订后的严格 JSON，无别的。
 
 【原卡】
@@ -232,7 +314,7 @@ ${JSON.stringify(card)}
 
 【用户的纠正】
 ${(corrections || []).map((c, i) => `${i + 1}. ${c}`).join("\n")}`;
-  return parseJson(await runClaude(prompt, null));
+  return parseJson(await runClaude(prompt, pickModel({ model }, null)));
 }
 
 function readBody(req) {
@@ -249,6 +331,7 @@ const ROUTES = {
   "/api/chat": (a) => (a.mode === "mirror" ? chatMirror(a) : chatCouncil(a)),
   "/api/speak": speak,
   "/api/beat": beat,
+  "/api/summon-match": summonMatch,
   "/api/generate-world": generateWorld,
   "/api/converge": converge,
   "/api/article": article,

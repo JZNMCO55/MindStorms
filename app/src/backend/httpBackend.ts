@@ -24,11 +24,17 @@ export interface ChatReply {
   text: string;
 }
 
+export interface Nomination {
+  wish: string;
+  reason: string;
+}
+
 type ChatReq = {
   mode: string;
   cards: unknown[];
   history: { role: string; text: string; cardName?: string }[];
   input: string;
+  model?: string;
 };
 export async function chatBackend(req: ChatReq): Promise<{ replies: ChatReply[] }> {
   return isTauri ? invoke("chat", req as Record<string, unknown>) : postJson("/api/chat", req);
@@ -39,9 +45,11 @@ type SpeakReq = {
   cards: unknown[];
   speaker: unknown;
   history: { role: string; text: string; cardName?: string }[];
+  model?: string;
 };
-// 议会单人发言：让一位「我」接着现场已经说的话往下讲（会接话/反驳）
-export async function speakBackend(req: SpeakReq): Promise<{ reply: string }> {
+// 议会单人发言：让一位「我」接着现场已经说的话往下讲（会接话/反驳）。
+// replyTo＝它在回应的那条消息的 1-based 编号（群聊式引用）；Tauri 旧后端可能不返回，按缺省处理。
+export async function speakBackend(req: SpeakReq): Promise<{ reply: string; replyTo?: number | null }> {
   return isTauri ? invoke("speak", req as Record<string, unknown>) : postJson("/api/speak", req);
 }
 
@@ -49,10 +57,30 @@ type BeatReq = {
   mode: string;
   cards: unknown[];
   history: { role: string; text: string; cardName?: string }[];
+  model?: string;
 };
-// 导演拍子：现场决定此刻谁开口（或聊透了 end），返回那一句
-export async function beatBackend(req: BeatReq): Promise<{ speaker: string; text: string; end: boolean }> {
+// 导演拍子：现场决定此刻谁开口（或聊透了 end），返回那一句；可能附带引用 replyTo 与提名 nominate。
+export async function beatBackend(
+  req: BeatReq,
+): Promise<{ speaker: string; text: string; end: boolean; replyTo?: number | null; nominate?: Nomination | null }> {
   return isTauri ? invoke("beat", req as Record<string, unknown>) : postJson("/api/beat", req);
+}
+
+export type SummonResult =
+  | { kind: "on_table"; name: string }
+  | { kind: "match"; candidates: { id: string; name: string; reason: string }[] }
+  | { kind: "propose"; sketch: { nameZh: string; oneLine: string } };
+
+type SummonReq = {
+  wish: string;
+  pool: unknown[];
+  onTable: string[];
+  topic?: string;
+  model?: string;
+};
+// 检索优先的召唤：先在池里找，找不到才提案现造。Tauri 旧后端没有此命令 → 抛错，由 store 兜底为 propose。
+export async function summonMatchBackend(req: SummonReq): Promise<SummonResult> {
+  return isTauri ? invoke("summon_match", req as Record<string, unknown>) : postJson("/api/summon-match", req);
 }
 
 export async function fetchSelfMirror(): Promise<Record<string, unknown> | null> {
@@ -72,20 +100,21 @@ export async function fetchSelfMirror(): Promise<Record<string, unknown> | null>
   }
 }
 
+// wish＝召唤意图种子（用户描述或导演提名）；topic＝当前话题做底色。
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function generateWorldBackend(topic?: string): Promise<any> {
-  return isTauri ? invoke("generate_world", { topic }) : postJson("/api/generate-world", { topic });
+export async function generateWorldBackend(req: { topic?: string; wish?: string; model?: string } = {}): Promise<any> {
+  return isTauri ? invoke("generate_world", req as Record<string, unknown>) : postJson("/api/generate-world", req);
 }
 
-type ConvReq = { cards: unknown[]; history: { role: string; text: string; cardName?: string }[]; topic: string };
+type ConvReq = { cards: unknown[]; history: { role: string; text: string; cardName?: string }[]; topic: string; model?: string };
 export async function convergeBackend(req: ConvReq): Promise<{ crux: string }> {
   return isTauri ? invoke("converge", req as Record<string, unknown>) : postJson("/api/converge", req);
 }
 
-export async function loadState(): Promise<{ conversations?: unknown[]; members?: unknown[] } | null> {
+export async function loadState(): Promise<{ conversations?: unknown[]; members?: unknown[]; model?: string } | null> {
   if (isTauri) {
     try {
-      return (await invoke("load_state")) as { conversations?: unknown[]; members?: unknown[] } | null;
+      return (await invoke("load_state")) as { conversations?: unknown[]; members?: unknown[]; model?: string } | null;
     } catch {
       return null;
     }
@@ -98,20 +127,20 @@ export async function loadState(): Promise<{ conversations?: unknown[]; members?
     return null;
   }
 }
-export async function saveState(state: { conversations: unknown[]; members: unknown[] }): Promise<void> {
+export async function saveState(state: { conversations: unknown[]; members: unknown[]; model?: string }): Promise<void> {
   try {
     if (isTauri) await invoke("save_state", { state });
     else await postJson("/api/state", state);
   } catch {}
 }
 
-export async function articleBackend(req: { topic: string; messages: unknown[] }): Promise<{ article: string }> {
+export async function articleBackend(req: { topic: string; messages: unknown[]; model?: string }): Promise<{ article: string }> {
   return isTauri ? invoke("article", req as Record<string, unknown>) : postJson("/api/article", req);
 }
 export async function saveArticleBackend(req: { title: string; content: string }): Promise<{ path: string }> {
   return isTauri ? invoke("save_article", req as Record<string, unknown>) : postJson("/api/save-article", req);
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function refineCardBackend(req: { card: unknown; corrections: string[] }): Promise<any> {
+export async function refineCardBackend(req: { card: unknown; corrections: string[]; model?: string }): Promise<any> {
   return isTauri ? invoke("refine_card", req as Record<string, unknown>) : postJson("/api/refine-card", req);
 }

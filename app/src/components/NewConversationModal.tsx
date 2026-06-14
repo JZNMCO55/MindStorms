@@ -16,13 +16,12 @@ export default function NewConversationModal() {
   const members = useStore((s) => s.members);
   const closeNewConvo = useStore((s) => s.closeNewConvo);
   const createConversation = useStore((s) => s.createConversation);
-  const summonWorld = useStore((s) => s.summonWorld);
-  const generating = useStore((s) => s.generating);
 
   const [draftMode, setDraftMode] = useState<Mode>("decision");
   // 镜子只属于镜子模式，不进议会候选
   const castable = members.filter((m) => m.id !== "mirror");
-  const [picked, setPicked] = useState<string[]>(() => castable.slice(0, 3).map((m) => m.id));
+  // 创建对话时只「拉」已有角色（可一个都不拉）；新角色改到会话里再生成。
+  const [picked, setPicked] = useState<string[]>([]);
 
   const toggle = (id: string) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
@@ -58,33 +57,28 @@ export default function NewConversationModal() {
         ) : (
           <div className="modal-section">
             <div className="modal-label">
-              初次召集的角色 <span className="muted">已选 {picked.length} 位</span>
+              拉入已有角色 <span className="muted">已选 {picked.length} 位 · 可不选</span>
             </div>
-            <div className="member-grid">
-              {castable.map((m) => (
-                <button
-                  key={m.id}
-                  className={"member-pick" + (picked.includes(m.id) ? " active" : "")}
-                  style={{ "--accent": m.accent } as CSSProperties}
-                  onClick={() => toggle(m.id)}
-                >
-                  <Avatar type={m.avatar} accent={m.accent} size={38} />
-                  <span>{m.nameZh}</span>
-                </button>
-              ))}
-              <button
-                className="member-pick summon"
-                disabled={generating}
-                onClick={async () => {
-                  const id = await summonWorld();
-                  if (id) setPicked((p) => (p.includes(id) ? p : [...p, id]));
-                }}
-                title="随机生成一个平行世界的你，加入这场对话"
-              >
-                <span className="summon-spark">{generating ? "⟳" : "✦"}</span>
-                <span>{generating ? "生成中…" : "生成一个新世界"}</span>
-              </button>
-            </div>
+            {castable.length === 0 ? (
+              <p className="mirror-note">还没有角色卡——先建一场空对话，进去后再生成和话题相关的「我」。</p>
+            ) : (
+              <>
+                <div className="member-grid">
+                  {castable.map((m) => (
+                    <button
+                      key={m.id}
+                      className={"member-pick" + (picked.includes(m.id) ? " active" : "")}
+                      style={{ "--accent": m.accent } as CSSProperties}
+                      onClick={() => toggle(m.id)}
+                    >
+                      <Avatar type={m.avatar} accent={m.accent} size={38} />
+                      <span>{m.nameZh}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="mirror-note pick-hint">新角色不在这里建——进对话后，在右侧「本场角色」里生成和话题相关的「我」。</p>
+              </>
+            )}
           </div>
         )}
 
@@ -92,10 +86,9 @@ export default function NewConversationModal() {
           <button className="btn-ghost" onClick={closeNewConvo}>取消</button>
           <button
             className="btn-primary"
-            disabled={draftMode !== "mirror" && picked.length === 0}
             onClick={() => createConversation(draftMode, picked)}
           >
-            召集 · 创建
+            {draftMode === "mirror" || picked.length > 0 ? "召集 · 创建" : "建一场空对话"}
           </button>
         </div>
       </div>

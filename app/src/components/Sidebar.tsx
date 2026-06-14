@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useStore } from "../store";
 import Avatar from "./Avatar";
 
@@ -42,18 +43,31 @@ export default function Sidebar() {
   const activeId = useStore((s) => s.activeConversationId);
   const setActiveConversation = useStore((s) => s.setActiveConversation);
   const openNewConvo = useStore((s) => s.openNewConvo);
+  const renameConversation = useStore((s) => s.renameConversation);
+  const deleteConversation = useStore((s) => s.deleteConversation);
   const members = useStore((s) => s.members);
   const openDetail = useStore((s) => s.openDetail);
   const deleteCard = useStore((s) => s.deleteCard);
-  const generateWorld = useStore((s) => s.generateWorld);
-  const generating = useStore((s) => s.generating);
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const leftTab = useStore((s) => s.leftTab);
   const setLeftTab = useStore((s) => s.setLeftTab);
 
+  const [editingId, setEditingId] = useState("");
+  const [editDraft, setEditDraft] = useState("");
+
   const onHistory = view === "council" && leftTab === "history";
   const onCards = view === "council" && leftTab === "cards";
+  const pool = members.filter((m) => m.saved); // 卡池只显示「已收入」的常驻角色
+
+  const startRename = (id: string, topic: string) => {
+    setEditingId(id);
+    setEditDraft(topic);
+  };
+  const commitRename = () => {
+    if (editingId) renameConversation(editingId, editDraft);
+    setEditingId("");
+  };
 
   return (
     <aside className="panel sidebar">
@@ -65,9 +79,7 @@ export default function Sidebar() {
       {leftTab === "history" ? (
         <button className="new-convo" onClick={openNewConvo}>＋ 新建对话</button>
       ) : (
-        <button className="new-convo gen" onClick={generateWorld} disabled={generating}>
-          {generating ? "✦ 生成中…" : "✦ 生成新世界"}
-        </button>
+        <p className="cards-note">角色不在这里建——进对话后点 ✦ 召唤，喜欢的再「收入卡池」。</p>
       )}
 
       {leftTab === "history" ? (
@@ -79,40 +91,69 @@ export default function Sidebar() {
                 key={c.id}
                 className={"history-item" + (activeId === c.id ? " active" : "")}
                 onClick={() => setActiveConversation(c.id)}
+                onDoubleClick={() => startRename(c.id, c.topic)}
               >
-                <span className="h-topic">{c.topic}</span>
+                {editingId === c.id ? (
+                  <input
+                    className="h-rename"
+                    autoFocus
+                    value={editDraft}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setEditDraft(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitRename();
+                      if (e.key === "Escape") setEditingId("");
+                    }}
+                  />
+                ) : (
+                  <span className="h-topic" title="双击改名">{c.topic}</span>
+                )}
                 <span className="h-date">{c.date}</span>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : (
-        <>
-          <div className="section-head static">
-            <span>🗂 角色卡库</span>
-            <span className="muted">{members.length}</span>
-          </div>
-          <ul className="collection">
-            {members.map((m) => (
-              <li key={m.id} className="coll-card" onClick={() => openDetail(m.id)}>
-                <Avatar type={m.avatar} accent={m.accent} size={38} />
-                <div className="coll-meta">
-                  <div className="coll-name">{m.nameZh}</div>
-                  <div className="coll-world">世界 #{m.worldId}</div>
-                </div>
                 <button
-                  className="coll-del"
-                  title="删除"
+                  className="h-del"
+                  title="删除对话"
                   onClick={(e) => {
                     e.stopPropagation();
-                    deleteCard(m.id);
+                    deleteConversation(c.id);
                   }}
                 >
                   ×
                 </button>
               </li>
             ))}
-            {members.length === 0 && <li className="empty">还没有收藏的世界</li>}
+            {conversations.length === 0 && <li className="empty">还没有对话，点上方「新建对话」开始。</li>}
+          </ul>
+        </>
+      ) : (
+        <>
+          <div className="section-head static">
+            <span>🗂 角色卡库</span>
+            <span className="muted">{pool.length}</span>
+          </div>
+          <ul className="collection">
+            {pool.map((m) => (
+              <li key={m.id} className="coll-card" onClick={() => openDetail(m.id)}>
+                <Avatar type={m.avatar} accent={m.accent} size={38} />
+                <div className="coll-meta">
+                  <div className="coll-name">{m.nameZh}</div>
+                  <div className="coll-world">世界 #{m.worldId}</div>
+                </div>
+                {m.id !== "mirror" && (
+                  <button
+                    className="coll-del"
+                    title="删除"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteCard(m.id);
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
+              </li>
+            ))}
+            {pool.length === 0 && <li className="empty">还没有收藏的世界</li>}
           </ul>
         </>
       )}
