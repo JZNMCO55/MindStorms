@@ -1,0 +1,18 @@
+# deps / build
+node_modules/
+app/node_modules/
+app/dist/
+dist/
+
+# rust (added later with Tauri)
+app/src-tauri/target/
+
+# corpus / distilled cards: personal data — NEVER commit
+corpus/
+!corpus/.gitkeep
+corpus_clean/
+cards/
+
+# env / secrets
+.env
+*.local
