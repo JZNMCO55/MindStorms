@@ -2,8 +2,14 @@ import { useState } from "react";
 import { useStore } from "../store";
 import Avatar from "./Avatar";
 
-function NavIcon({ name }: { name: "history" | "cards" | "book" | "graph" }) {
+function NavIcon({ name }: { name: "history" | "cards" | "book" | "graph" | "settings" }) {
   const paths: Record<string, JSX.Element> = {
+    settings: (
+      <>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M12 3v2.5M12 18.5V21M21 12h-2.5M5.5 12H3M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8M18.4 18.4l-1.8-1.8M7.4 7.4 5.6 5.6" />
+      </>
+    ),
     history: (
       <>
         <circle cx="12" cy="12" r="8" />
@@ -52,6 +58,7 @@ export default function Sidebar() {
   const setView = useStore((s) => s.setView);
   const leftTab = useStore((s) => s.leftTab);
   const setLeftTab = useStore((s) => s.setLeftTab);
+  const openSettings = useStore((s) => s.openSettings);
 
   const [editingId, setEditingId] = useState("");
   const [editDraft, setEditDraft] = useState("");
@@ -169,6 +176,7 @@ export default function Sidebar() {
           <NavIcon name="book" />
         </button>
         <button title="关系图"><NavIcon name="graph" /></button>
+        <button title="模型设置" onClick={openSettings}><NavIcon name="settings" /></button>
       </nav>
     </aside>
   );

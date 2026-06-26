@@ -144,3 +144,33 @@ export async function saveArticleBackend(req: { title: string; content: string }
 export async function refineCardBackend(req: { card: unknown; corrections: string[]; model?: string }): Promise<any> {
   return isTauri ? invoke("refine_card", req as Record<string, unknown>) : postJson("/api/refine-card", req);
 }
+
+// ---- 模型设置：provider / 鉴权 / key / baseUrl / 默认模型 ----
+export type Provider = "claude" | "openai" | "deepseek" | "glm" | "kimi" | "custom";
+export interface LLMSettings {
+  provider: Provider;
+  auth: "subscription" | "apikey"; // 仅 claude 有意义；其它家恒为 apikey
+  apiKey: string;
+  oauthToken: string; // 可选：claude 订阅模式注入 CLAUDE_CODE_OAUTH_TOKEN
+  baseUrl: string; // OpenAI 兼容家的接入点（留空用默认）
+  model: string; // 默认模型 id（留空用各家默认）
+}
+
+export async function loadSettings(): Promise<Partial<LLMSettings>> {
+  if (isTauri) {
+    try { return (await invoke("load_settings")) as Partial<LLMSettings>; } catch { return {}; }
+  }
+  try {
+    const r = await fetch(`${BASE}/api/settings`);
+    if (!r.ok) return {};
+    return await r.json();
+  } catch {
+    return {};
+  }
+}
+export async function saveSettings(s: Partial<LLMSettings>): Promise<void> {
+  try {
+    if (isTauri) await invoke("save_settings", { settings: s });
+    else await postJson("/api/settings", s);
+  } catch {}
+}

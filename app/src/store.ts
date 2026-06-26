@@ -5,21 +5,31 @@ import { SAMPLE_MEMBERS, SAMPLE_CONVERSATIONS, CANDIDATE_POOL } from "./data/sam
 import {
   chatBackend, beatBackend, speakBackend, summonMatchBackend, fetchSelfMirror,
   generateWorldBackend, convergeBackend, loadState, saveState, articleBackend,
-  saveArticleBackend, refineCardBackend,
+  saveArticleBackend, refineCardBackend, loadSettings, saveSettings,
 } from "./backend/httpBackend";
-import type { Nomination } from "./backend/httpBackend";
+import type { Nomination, LLMSettings } from "./backend/httpBackend";
 
 export type View = "council" | "corpus";
 export type PanelView = "roster" | "detail";
 export type LeftTab = "history" | "cards";
 
-// 模型切换：空串＝用各接口默认；其余透传给 claude --model（接受别名 opus/sonnet/haiku）。
+// 逐场模型覆盖：空串＝用「设置」里的默认；opus/sonnet/haiku 是 Claude 别名（仅 Claude provider 生效，
+// 切到 DeepSeek/GLM 等会被后端忽略、回落到设置里的默认模型）。换 provider/填 key 在右上角「设置」里。
 export const MODEL_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "默认" },
   { value: "opus", label: "Opus · 最强" },
   { value: "sonnet", label: "Sonnet · 均衡" },
   { value: "haiku", label: "Haiku · 最快" },
 ];
+
+export const DEFAULT_SETTINGS: LLMSettings = {
+  provider: "claude",
+  auth: "subscription",
+  apiKey: "",
+  oauthToken: "",
+  baseUrl: "",
+  model: "",
+};
 
 const AVATARS: AvatarKind[] = ["crystal", "pyramid", "heart", "hourglass", "orb"];
 const MIRROR = SAMPLE_MEMBERS[0]; // 「镜子里的我」
@@ -85,6 +95,8 @@ interface AppState {
   articleText: string;
   articleTitle: string;
   model: string;
+  settings: LLMSettings;
+  settingsOpen: boolean;
   // 召唤(检索优先)流程状态
   summonOpen: boolean;
   summonBusy: boolean;
@@ -104,6 +116,9 @@ interface AppState {
   closeNewConvo: () => void;
   createConversation: (mode: Mode, memberIds: string[]) => void;
   setModel: (m: string) => void;
+  openSettings: () => void;
+  closeSettings: () => void;
+  updateSettings: (patch: Partial<LLMSettings>) => Promise<void>;
 
   openSummon: () => void;
   closeSummon: () => void;
@@ -185,6 +200,8 @@ export const useStore = create<AppState>((set, get) => {
     articleText: "",
     articleTitle: "",
     model: "",
+    settings: DEFAULT_SETTINGS,
+    settingsOpen: false,
     summonOpen: false,
     summonBusy: false,
     summonNote: "",
@@ -201,6 +218,14 @@ export const useStore = create<AppState>((set, get) => {
     openNewConvo: () => set({ newConvoOpen: true }),
     closeNewConvo: () => set({ newConvoOpen: false }),
     setModel: (model) => set({ model }),
+
+    openSettings: () => set({ settingsOpen: true }),
+    closeSettings: () => set({ settingsOpen: false }),
+    updateSettings: async (patch) => {
+      const next = { ...get().settings, ...patch };
+      set({ settings: next });
+      await saveSettings(next);
+    },
 
     createConversation: (mode, memberIds) =>
       set((s) => {
@@ -358,6 +383,8 @@ export const useStore = create<AppState>((set, get) => {
 
     // 从盘加载持久化状态；没有就用样例。确保「镜子里的我」始终在、且历史卡补上 saved 标记。
     hydrate: async () => {
+      const cfg = await loadSettings();
+      if (cfg && Object.keys(cfg).length) set((st) => ({ settings: { ...st.settings, ...cfg } }));
       const saved = await loadState();
       if (saved && Array.isArray(saved.members) && saved.members.length) {
         let members = saved.members as CouncilMember[];

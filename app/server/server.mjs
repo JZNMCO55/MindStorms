@@ -21,13 +21,32 @@ function loadSelfMirror() {
   }
 }
 
-function runClaude(prompt, model) {
+// ---- 多 provider LLM 层 ----
+// Claude 订阅 = spawn `claude` CLI（已验证、最稳，等价于走订阅 OAuth，不按 token 计费）；
+// Claude API key / 其它家（OpenAI 兼容：ChatGPT、DeepSeek、GLM、Kimi…）= 直连 HTTP。
+// 选哪条由 cards/settings.json 决定，前端「设置」面板写入。
+const SETTINGS_FILE = "E:\\ForStudy\\Project\\MindStorms\\cards\\settings.json";
+function loadSettings() {
+  try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")); } catch { return {}; }
+}
+// OpenAI 兼容各家的默认接入点 + 默认模型（baseUrl/model 都可被 settings 覆盖）
+const PRESETS = {
+  openai:   { baseUrl: "https://api.openai.com/v1",            model: "gpt-4o" },
+  deepseek: { baseUrl: "https://api.deepseek.com",             model: "deepseek-chat" },
+  glm:      { baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-plus" },
+  kimi:     { baseUrl: "https://api.moonshot.cn/v1",           model: "moonshot-v1-32k" },
+  custom:   { baseUrl: "",                                     model: "" },
+};
+// 前端下拉传来的多是 Claude 别名——非 Claude provider 一律忽略，回落到该家默认模型。
+const isClaudeAlias = (m) => !m || m === "opus" || m === "sonnet" || m === "haiku" || String(m).startsWith("claude");
+
+// Claude 订阅：spawn `claude`，置空 API key 走订阅；可选注入 setup-token（CLAUDE_CODE_OAUTH_TOKEN）。
+function runClaudeCli(prompt, model, oauthToken) {
   return new Promise((resolve, reject) => {
     const cli = ["-p", "--output-format", "json", ...(model ? ["--model", model] : [])];
-    const proc = spawn("cmd.exe", ["/c", "claude", ...cli], {
-      env: { ...process.env, ANTHROPIC_API_KEY: "" },
-      cwd: "D:\\tools",
-    });
+    const env = { ...process.env, ANTHROPIC_API_KEY: "" };
+    if (oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+    const proc = spawn("cmd.exe", ["/c", "claude", ...cli], { env, cwd: "D:\\tools" });
     let out = "";
     const killer = setTimeout(() => { try { proc.kill(); } catch {} }, 150000);
     proc.stdout.on("data", (d) => (out += d));
@@ -41,6 +60,51 @@ function runClaude(prompt, model) {
     });
     proc.on("error", reject);
   });
+}
+
+// Claude HTTP（API key，按 token 计费）：标准 x-api-key。
+async function anthropicHttp(prompt, model, apiKey) {
+  if (!apiKey) throw new Error("Claude(API key) 未配置 apiKey");
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model, max_tokens: 4096, messages: [{ role: "user", content: prompt }] }),
+  });
+  if (!r.ok) throw new Error("anthropic " + r.status + " " + (await r.text()).slice(0, 300));
+  const j = await r.json();
+  return (Array.isArray(j.content) ? j.content : []).map((c) => c.text || "").join("").trim();
+}
+
+// OpenAI 兼容（ChatGPT/DeepSeek/GLM/Kimi/自建中转）：Bearer + /chat/completions。
+async function openaiHttp(prompt, model, baseUrl, apiKey) {
+  if (!baseUrl) throw new Error("未配置 baseUrl");
+  if (!apiKey) throw new Error("未配置 apiKey");
+  const r = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, temperature: 0.8, messages: [{ role: "user", content: prompt }] }),
+  });
+  if (!r.ok) throw new Error("llm " + r.status + " " + (await r.text()).slice(0, 300));
+  const j = await r.json();
+  return String((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "").trim();
+}
+
+// 统一入口（替代原 runClaude）：按 settings 选 provider/鉴权。
+//   reqModel    = 前端下拉的逐场覆盖（多为 Claude 别名）
+//   claudeDefault = 该接口偏好的 Claude 模型（null＝用 CLI/账号默认）
+async function callLLM(prompt, reqModel, claudeDefault) {
+  const s = loadSettings();
+  const provider = s.provider || "claude";
+  if (provider === "claude") {
+    const model = (reqModel && String(reqModel)) || s.model || claudeDefault || "";
+    if ((s.auth || "subscription") === "subscription") return runClaudeCli(prompt, model, s.oauthToken);
+    return anthropicHttp(prompt, model || "claude-sonnet-4-6", s.apiKey);
+  }
+  const preset = PRESETS[provider] || PRESETS.custom;
+  const baseUrl = (s.baseUrl || preset.baseUrl || "").trim();
+  const model = (reqModel && !isClaudeAlias(reqModel) ? String(reqModel) : "") || s.model || preset.model;
+  if (!model) throw new Error(`provider ${provider} 未配置 model`);
+  return openaiHttp(prompt, model, baseUrl, s.apiKey);
 }
 function parseJson(raw) {
   const j = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
@@ -57,22 +121,42 @@ function historyNumbered(history) {
     .map((h, i) => `${i + 1}) ` + (h.role === "user" ? "他" : (h.cardName || "议会")) + "：" + h.text)
     .join("\n");
 }
-// 前端可传 model 覆盖；不传就用各接口的默认模型。
-const pickModel = (a, def) => (a && typeof a.model === "string" && a.model ? a.model : def);
 function clampReplyTo(v, len) {
   const n = Math.round(Number(v));
   return Number.isFinite(n) && n >= 1 && n <= len ? n : null;
 }
+// 反 AI 腔禁忌：所有「聊天语域」发言入口共享，单一来源。
+// 研究依据——markdown 腔 + 超额书面连接词是可清点的 AI 签名（去AI味研究 §词法签名层）。
+const ANTI_AI_TELL = `【绝对别露 AI 马脚｜他从不这么说话，违反即穿帮】
+- 禁 markdown 加粗（**这种**）、禁破折号"——"串排比金句、禁给词打「」引号。
+- 禁"你是一个……的人 / 你所有的 X 都……"这种下定义判案的腔。
+- 禁书面连接词："值得注意的是""总的来说""综上""不仅…而且""让我们""首先/其次"。
+- 别每句都金句/专家腔；留点迟疑、半句话、"我也说不准"。`;
+
+// 把主世界的他真实写下的原话当 few-shot 范例注入。
+// 风格活在「原话」里、不在「对风格的描述」里（UAR/作者风格嵌入的实证）；
+// 优先挑短句（聊天语域），别让公众号长文腔漏进群聊。
+function voiceExemplars(m, n = 6) {
+  const all = m && Array.isArray(m.grounding) ? m.grounding.filter(Boolean) : [];
+  if (!all.length) return "";
+  const short = all.filter((g) => g.length <= 40);
+  const pick = (short.length >= 3 ? short : all).slice(0, n);
+  return `他平时真的会这么说话（学这个味儿和这个句子长度，别照搬内容）：${pick.map((g) => `「${g}」`).join("  ")}`;
+}
+
 function selfBackdrop() {
   const m = loadSelfMirror();
   if (!m) return "";
-  return `主世界的他的底色（语气/价值观，仅供你贴着写，别照抄）：${m.summary || ""}｜口头禅：${(m.catchphrases || []).slice(0, 4).join("、")}\n`;
+  const ex = voiceExemplars(m);
+  return `主世界的他的底色（语气/价值观，仅供你贴着写，别照抄）：${m.summary || ""}｜口头禅：${(m.catchphrases || []).slice(0, 4).join("、")}
+${ex ? ex + "\n" : ""}${ANTI_AI_TELL}
+`;
 }
 
 async function chatMirror({ history, input, model }) {
   const m = loadSelfMirror();
   if (!m) throw new Error("self_mirror 未蒸馏");
-  const voiceGuide = `${m.voice || ""}\n他平时真的会这么说话（学这个味儿，别照搬内容）：${(m.grounding || []).slice(0, 5).map((g) => `「${g}」`).join("  ")}`;
+  const voiceGuide = `${m.voice || ""}\n${voiceExemplars(m)}`;
   const prompt = `你不是 AI 助手，也不是心理咨询师——你就是「他本人」，一个人对着镜子跟自己唠嗑。下面是你（他）的画像，经历、在怕什么、在逃避什么都在里面：
 ${JSON.stringify(m)}
 
@@ -80,9 +164,9 @@ ${JSON.stringify(m)}
 你的腔调：${voiceGuide}
 所以：
 - 短句、口语、能带感叹号；像发微信那样自然，别写小作文。
-- **绝对禁止**：markdown 加粗（**这种**）、破折号"——"串成的排比金句、给词打「」引号、开口就"你是一个……的人 / 你所有的X都……"这样下定义判案。这些全是 AI 腔，他从不这么说话。
 - 锋芒包进玩笑里：认真话后面可以跟个"(bushi""(doge""我瞎说的哈"，可以自嘲、可以损自己。别像个冷静的旁观者在解剖他。
-- 别每句都金句/专家腔。可以有"嗯…""我也说不准""可能吧"这种迟疑、半句话，像真在跟自己嘀咕。
+- 可以有"嗯…""我也说不准""可能吧"这种迟疑、半句话，像真在跟自己嘀咕。
+${ANTI_AI_TELL}
 
 【你要做的】
 你比谁都懂他（画像里全是他的真事和原话）。帮他把自己没照见的照出来，但**用他自己的方式**：
@@ -99,7 +183,7 @@ ${historyText(history) || "（刚开始）"}
 【他刚说】${input}
 
 镜子里的你，接着唠（贴死他的腔调，别露 AI 马脚）：`;
-  const text = (await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"))).trim();
+  const text = (await callLLM(prompt, model, "claude-sonnet-4-6")).trim();
   return { replies: [{ cardName: "镜子里的我", text }] };
 }
 
@@ -122,7 +206,7 @@ ${historyText(history) || "（刚开始）"}
 
 让每个上场角色各发一言：既像他本人（贴他的腔调），又活出各自那条路的取舍；可互相回应；1-3 句，中文口语。
 严格输出 JSON 数组，无别的：[{"cardName":"角色的中文名","text":"发言"}]`;
-  const raw = await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"));
+  const raw = await callLLM(prompt, model, "claude-sonnet-4-6");
   try { return { replies: parseJson(raw) }; }
   catch { return { replies: [{ cardName: "议会", text: raw.trim() }] }; }
 }
@@ -154,7 +238,7 @@ ${historyNumbered(hist) || "（还没人开口）"}
 - **别在话里报谁说的**（"读博的我说…"这种）——头像已经标了谁在说。要是你这句针对上面某一条，就用 replyTo 指向它的编号；顺着往下说就别填。
 - 1-3 句，中文口语，像在现场插话。
 严格输出 JSON，无别的：{"text":"你这句话","replyTo":针对的那条编号或null}`;
-  const raw = await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"));
+  const raw = await callLLM(prompt, model, "claude-sonnet-4-6");
   try {
     const j = parseJson(raw);
     return { reply: String(j.text || "").trim(), replyTo: clampReplyTo(j.replyTo, hist.length) };
@@ -194,7 +278,7 @@ ${roster}
 ${historyNumbered(hist)}
 
 严格输出 JSON，无别的：{"speaker":"开口者的中文名（必须是在场角色之一）","text":"他这一句","replyTo":针对的那条编号或null,"end":true或false,"nominate":{"wish":"一个怎样的我","reason":"为什么这场需要他"}或null}`;
-  const raw = await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"));
+  const raw = await callLLM(prompt, model, "claude-sonnet-4-6");
   try {
     const j = parseJson(raw);
     const nom = j.nominate && j.nominate.wish
@@ -233,7 +317,7 @@ ${list || "（池子是空的）"}
 
 **保守**：宁可 propose 一个真正不同的我，也别硬把不搭的卡塞过来充数。
 严格输出 JSON，无别的：{"kind":"on_table|match|propose","name":"","candidates":[{"n":1,"reason":""}],"sketch":{"nameZh":"","oneLine":""}}`;
-  const raw = await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6"));
+  const raw = await callLLM(prompt, model, "claude-sonnet-4-6");
   let j;
   try { j = parseJson(raw); } catch { return { kind: "propose", sketch: { nameZh: want, oneLine: "" } }; }
   if (j.kind === "on_table") return { kind: "on_table", name: String(j.name || "").trim() };
@@ -259,20 +343,21 @@ async function generateWorld({ topic, wish, model }) {
   const prompt = `${base}请基于「主世界的他」，虚构一个**平行世界的他**——在某个他真实可能走过的人生岔路上分叉出去的版本。给它一个世界编号、一段经历、以及由经历长出的性格。要贴着他的底色（他可能真会走的路、说话的腔调），但活出一条不同的取舍。${wishLine}${topic ? `这个世界要特别能就「${topic}」给他一个他自己想不到的视角。` : ""}
 严格输出 JSON，无别的：
 {"worldId":"如 C-42","nameEn":"英文别名","nameZh":"如『没放弃画画的我』","backstory":"2-3句经历","resonance":0到100的数字,"utilityTitle":"它在乎/优化什么","utilityDesc":"一句","timeHorizon":"时间视野","timeHorizonDesc":"一句","catchphrase":"一句口头禅","voiceTags":["3个性格词"],"avatar":"crystal|pyramid|heart|hourglass|orb 之一","accent":"6位hex如#7ad0ff"}`;
-  return parseJson(await runClaude(prompt, pickModel({ model }, "claude-sonnet-4-6")));
+  return parseJson(await callLLM(prompt, model, "claude-sonnet-4-6"));
 }
 
 async function converge({ cards, history, topic, model }) {
   const roster = (cards || []).map((c) => `${c.nameZh}（在乎：${c.utilityTitle || ""}）`).join("、");
   const prompt = `下面是某人(他)内心几个『平行世界的我』围绕一个问题的辩论。请你以「主宇宙的他」——那个真要承担后果、做决定的本人——的身份，把这场辩论**收敛**成他一直在回避的那个取舍。
 不要投票选某个世界、不要和稀泥。点出：真正的选择不是『谁对』，而是『哪一种损失他能承受』。简短、有力、戳心，2-4 句，中文，第二人称对他说。
+${ANTI_AI_TELL}
 ${topic ? `议题：${topic}\n` : ""}上场的世界：${roster}
 
 【辩论】
 ${historyText(history)}
 
 主宇宙的我，收敛：`;
-  const text = (await runClaude(prompt, pickModel({ model }, null))).trim();
+  const text = (await callLLM(prompt, model, null)).trim();
   return { crux: text };
 }
 
@@ -293,7 +378,7 @@ async function article({ topic, messages, model }) {
 
 【讨论记录】
 ${transcript}`;
-  return { article: (await runClaude(prompt, pickModel({ model }, null))).trim() };
+  return { article: (await callLLM(prompt, model, null)).trim() };
 }
 
 function saveArticle({ title, content }) {
@@ -314,7 +399,7 @@ ${JSON.stringify(card)}
 
 【用户的纠正】
 ${(corrections || []).map((c, i) => `${i + 1}. ${c}`).join("\n")}`;
-  return parseJson(await runClaude(prompt, pickModel({ model }, null)));
+  return parseJson(await callLLM(prompt, model, null));
 }
 
 function readBody(req) {
@@ -360,6 +445,21 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/api/state") {
     const b = await readBody(req);
     try { fs.writeFileSync(STATE_FILE, b, "utf8"); } catch {}
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end('{"ok":true}');
+  }
+
+  // 模型设置：provider / 鉴权 / key / baseUrl / 默认模型。POST 用浅合并，避免改一项把别的清空。
+  if (req.method === "GET" && req.url === "/api/settings") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify(loadSettings() || {}));
+  }
+  if (req.method === "POST" && req.url === "/api/settings") {
+    const b = await readBody(req);
+    try {
+      const merged = { ...loadSettings(), ...JSON.parse(b || "{}") };
+      fs.writeFileSync(SETTINGS_FILE, JSON.stringify(merged, null, 2), "utf8");
+    } catch {}
     res.writeHead(200, { "Content-Type": "application/json" });
     return res.end('{"ok":true}');
   }

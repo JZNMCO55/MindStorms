@@ -6,12 +6,14 @@ import Inspector from "./components/Inspector";
 import CorpusImport from "./components/CorpusImport";
 import NewConversationModal from "./components/NewConversationModal";
 import ArticleModal from "./components/ArticleModal";
+import SettingsModal from "./components/SettingsModal";
 import { useStore } from "./store";
 
 export default function App() {
   const view = useStore((s) => s.view);
   const newConvoOpen = useStore((s) => s.newConvoOpen);
   const articleOpen = useStore((s) => s.articleOpen);
+  const settingsOpen = useStore((s) => s.settingsOpen);
   const hydrate = useStore((s) => s.hydrate);
   const loadMirror = useStore((s) => s.loadMirror);
 
@@ -34,6 +36,7 @@ export default function App() {
       </div>
       {newConvoOpen && <NewConversationModal />}
       {articleOpen && <ArticleModal />}
+      {settingsOpen && <SettingsModal />}
     </>
   );
 }
